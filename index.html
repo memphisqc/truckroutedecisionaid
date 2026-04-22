@@ -1,1 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Route Planner</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://router.project-osrm.org">
+  <link rel="preconnect" href="https://api.open-meteo.com">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a30;
+      --panel-2: #18223d;
+      --line: rgba(255,255,255,0.12);
+      --soft: rgba(255,255,255,0.06);
+      --text: #eef4ff;
+      --muted: #adbbd7;
+      --accent: #4ea1ff;
+      --accent-2: #7cf0ff;
+      --good: #85f0a1;
+      --warn: #ffd27d;
+      --bad: #ff9c9c;
+      --shadow: 0 18px 42px rgba(0,0,0,0.28);
+      --radius: 20px;
+    }
 
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(78,161,255,0.18), transparent 35%),
+        radial-gradient(circle at top right, rgba(124,240,255,0.12), transparent 28%),
+        linear-gradient(180deg, #09101f 0%, #0b1020 100%);
+      color: var(--text);
+    }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .hero {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 28px;
+      padding: 24px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(78,161,255,0.12);
+      color: #d8ebff;
+      font-size: 0.84rem;
+      border: 1px solid rgba(78,161,255,0.22);
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 3vw, 3.1rem);
+      line-height: 1.02;
+      letter-spacing: -0.03em;
+    }
+
+    .subtext {
+      margin: 0;
+      color: var(--muted);
+      max-width: 980px;
+      line-height: 1.6;
+      font-size: 1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 430px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.018));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .controls {
+      padding: 18px;
+      position: sticky;
+      top: 16px;
+    }
+
+    .section-title {
+      margin: 0 0 14px;
+      font-size: 1.08rem;
+      letter-spacing: -0.02em;
+    }
+
+    .fields {
+      display: grid;
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    select, input[type="text"], button {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,0.11);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 14px;
+      min-height: 50px;
+      padding: 12px 14px;
+      font-size: 0.96rem;
+      outline: none;
+    }
+
+    select:focus, input[type="text"]:focus {
+      border-color: rgba(124,240,255,0.55);
+      box-shadow: 0 0 0 4px rgba(124,240,255,0.10);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 56px;
+      gap: 10px;
+    }
+
+    .inline-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 650;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button.primary {
+      background: linear-gradient(180deg, var(--accent), #2e7be0);
+      border-color: rgba(255,255,255,0.16);
+      color: white;
+    }
+
+    button.secondary {
+      background: rgba(255,255,255,0.03);
+    }
+
+    .icon-btn {
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      font-size: 1.15rem;
+    }
+
+    .meta-box {
+      margin-top: 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.025);
+      padding: 14px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .stat {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.025);
+      padding: 12px;
+    }
+
+    .stat .k {
+      display: block;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-bottom: 6px;
+    }
+
+    .stat .v {
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .map-wrap {
+      padding: 14px;
+    }
+
+    #map {
+      width: 100%;
+      height: 62vh;
+      min-height: 540px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+
+    .results {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .route-card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02));
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 13px 14px;
+      cursor: pointer;
+      transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    }
+
+    .route-card:hover,
+    .route-card.active {
+      border-color: rgba(124,240,255,0.50);
+      background: linear-gradient(180deg, rgba(78,161,255,0.12), rgba(255,255,255,0.03));
+      transform: translateY(-1px);
+    }
+
+    .route-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .route-name {
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .badge {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 0.77rem;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+    }
+
+    .route-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .route-pill {
+      border-radius: 14px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.07);
+      padding: 10px;
+      min-height: 72px;
+    }
+
+    .route-pill .label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .route-pill .value {
+      display: block;
+      font-size: 0.93rem;
+      line-height: 1.35;
+      font-weight: 650;
+    }
+
+    .loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: #d8ebff;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 2px solid rgba(255,255,255,0.22);
+      border-top-color: white;
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status {
+      margin-top: 14px;
+      min-height: 24px;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .legend {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .tiny {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: 1fr; }
+      .controls { position: static; }
+      .route-grid { grid-template-columns: 1fr 1fr; }
+      #map { min-height: 500px; height: 56vh; }
+    }
+
+    @media (max-width: 700px) {
+      .shell { padding: 14px; }
+      .hero { padding: 18px; border-radius: 22px; }
+      .route-grid { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr; }
+      .inline-actions { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      #map { min-height: 420px; height: 52vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero panel">
+      <div class="eyebrow">Route Planner • No Google Required</div>
+      <h1>Pick a start, pick an end, compare routes, then show the selected route on the map.</h1>
+      <p class="subtext">
+        This page reads your location CSV, removes duplicate exact entries, lets you filter by type, ranks route choices,
+        shows mileage and drive time, adds a weather delay note, and draws the chosen route on the map.
+      </p>
+    </section>
+
+    <section class="grid">
+      <aside class="panel controls">
+        <h2 class="section-title">Route Controls</h2>
+        <div class="fields">
+          <div class="field">
+            <label for="typeFilter">Type</label>
+            <select id="typeFilter">
+              <option value="All">All</option>
+              <option value="Airport">Airport</option>
+              <option value="Ramp">Ramp</option>
+              <option value="Station">Station</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="startInput">Starting Location</label>
+            <div class="row">
+              <input id="startInput" type="text" list="startList" placeholder="Search and select a start location" autocomplete="off" />
+              <button id="swapBtn" class="secondary icon-btn" type="button" title="Swap start and end">⇅</button>
+            </div>
+            <datalist id="startList"></datalist>
+          </div>
+
+          <div class="field">
+            <label for="endInput">Ending Location</label>
+            <input id="endInput" type="text" list="endList" placeholder="Search and select an end location" autocomplete="off" />
+            <datalist id="endList"></datalist>
+          </div>
+
+          <div class="inline-actions">
+            <button id="findRoutesBtn" class="primary" type="button">Find Routes</button>
+            <button id="resetBtn" class="secondary" type="button">Reset</button>
+          </div>
+        </div>
+
+        <div class="meta-box">
+          <strong>How to use it</strong><br>
+          Start typing in each location box and choose an exact match from the dropdown list. Then press <strong>Find Routes</strong>.
+          Click any route bar below to push that route onto the map.
+        </div>
+
+        <div class="stats">
+          <div class="stat"><span class="k">Loaded points</span><span class="v" id="loadedCount">—</span></div>
+          <div class="stat"><span class="k">Filtered points</span><span class="v" id="filteredCount">—</span></div>
+          <div class="stat"><span class="k">Routes shown</span><span class="v" id="routeCount">0</span></div>
+        </div>
+
+        <div class="status" id="statusMsg">Loading locations from CSV…</div>
+
+        <div class="results" id="results"></div>
+
+        <div class="legend">
+          <strong>Traffic note:</strong> this version does not use a paid live incident feed. The traffic/issues box gives a useful relative route note based on route ranking and extra drive time versus the best option.<br>
+          <strong>Weather delay:</strong> based on current weather near the route midpoint.
+        </div>
+      </aside>
+
+      <section class="panel map-wrap">
+        <div id="map"></div>
+        <p class="tiny">Map data © OpenStreetMap contributors</p>
+      </section>
+    </section>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script>
+    const CSV_PATH = './locationsAltMoveZips.csv';
+    const ROUTER_BASE = 'https://router.project-osrm.org/route/v1/driving/';
+    const WEATHER_BASE = 'https://api.open-meteo.com/v1/forecast';
+
+    const els = {
+      typeFilter: document.getElementById('typeFilter'),
+      startInput: document.getElementById('startInput'),
+      endInput: document.getElementById('endInput'),
+      startList: document.getElementById('startList'),
+      endList: document.getElementById('endList'),
+      findRoutesBtn: document.getElementById('findRoutesBtn'),
+      swapBtn: document.getElementById('swapBtn'),
+      resetBtn: document.getElementById('resetBtn'),
+      statusMsg: document.getElementById('statusMsg'),
+      results: document.getElementById('results'),
+      loadedCount: document.getElementById('loadedCount'),
+      filteredCount: document.getElementById('filteredCount'),
+      routeCount: document.getElementById('routeCount')
+    };
+
+    let allLocations = [];
+    let filteredLocations = [];
+    let currentRoutes = [];
+    let currentRouteIndex = 0;
+    let routeLine = null;
+    let startMarker = null;
+    let endMarker = null;
+
+    const map = L.map('map', { zoomControl: true }).setView([39.5, -98.35], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    function setStatus(message, loading = false) {
+      els.statusMsg.innerHTML = loading
+        ? `<span class="loading"><span class="spinner"></span>${message}</span>`
+        : message;
+    }
+
+    function safeText(value) {
+      return String(value ?? '').trim();
+    }
+
+    function hasCoords(row) {
+      return Number.isFinite(row.Latitude) && Number.isFinite(row.Longitude);
+    }
+
+    function buildLabel(row) {
+      const cityState = [safeText(row.City), safeText(row.State)].filter(Boolean).join(', ');
+      const zipText = safeText(row.Zip).replace(/\.0$/, '');
+      const parts = [safeText(row.Type), safeText(row.LocationName) || safeText(row.ID) || safeText(row.StationKey)];
+      if (cityState) parts.push(cityState);
+      if (zipText) parts.push(`ZIP ${zipText}`);
+      return parts.filter(Boolean).join(' • ');
+    }
+
+    function normalizeRecord(row, index) {
+      const zip = safeText(row.Zip).replace(/\.0$/, '');
+      return {
+        id: `${safeText(row.Type)}|${safeText(row.LocationName)}|${safeText(row.City)}|${safeText(row.State)}|${zip}|${Number(row.Latitude).toFixed(5)}|${Number(row.Longitude).toFixed(5)}|${index}`,
+        type: safeText(row.Type) || 'Unknown',
+        stationKey: safeText(row.StationKey),
+        locationName: safeText(row.LocationName),
+        locationId: safeText(row.ID),
+        zip,
+        zipId: safeText(row.ZipID),
+        city: safeText(row.City),
+        state: safeText(row.State),
+        country: safeText(row.Country) || 'United States',
+        lat: Number(row.Latitude),
+        lon: Number(row.Longitude),
+        label: buildLabel(row)
+      };
+    }
+
+    function populateDatalists() {
+      const options = filteredLocations
+        .slice()
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map(item => `<option value="${item.label.replace(/"/g, '&quot;')}"></option>`)
+        .join('');
+      els.startList.innerHTML = options;
+      els.endList.innerHTML = options;
+      els.filteredCount.textContent = filteredLocations.length.toLocaleString();
+    }
+
+    function applyTypeFilter() {
+      const type = els.typeFilter.value;
+      filteredLocations = type === 'All'
+        ? allLocations.slice()
+        : allLocations.filter(item => item.type.toLowerCase() === type.toLowerCase());
+      populateDatalists();
+      setStatus(`Loaded ${filteredLocations.length.toLocaleString()} selectable ${type === 'All' ? 'locations' : type.toLowerCase() + ' locations'}.`);
+    }
+
+    function findLocationByLabel(label) {
+      const exact = filteredLocations.find(item => item.label === label.trim());
+      if (exact) return exact;
+      const loose = filteredLocations.find(item => item.label.toLowerCase() === label.trim().toLowerCase());
+      return loose || null;
+    }
+
+    function miles(meters) {
+      return meters / 1609.344;
+    }
+
+    function formatMiles(meters) {
+      return `${miles(meters).toFixed(1)} mi`;
+    }
+
+    function formatDuration(seconds) {
+      const totalMinutes = Math.round(seconds / 60);
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      if (hours <= 0) return `${totalMinutes} min`;
+      return `${hours} hr ${minutes} min`;
+    }
+
+    function midpointFromGeometry(coords) {
+      if (!coords || !coords.length) return null;
+      return coords[Math.floor(coords.length / 2)];
+    }
+
+    async function getWeatherNote(route) {
+      try {
+        const midpoint = midpointFromGeometry(route.geometry?.coordinates || []);
+        if (!midpoint) return 'Weather unavailable';
+        const [lon, lat] = midpoint;
+        const url = `${WEATHER_BASE}?latitude=${lat}&longitude=${lon}&current=temperature_2m,precipitation,wind_speed_10m,weather_code`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Weather fetch failed');
+        const data = await res.json();
+        const current = data.current || {};
+        const precip = Number(current.precipitation ?? 0);
+        const wind = Number(current.wind_speed_10m ?? 0);
+        const temp = Number(current.temperature_2m ?? NaN);
+
+        if (precip >= 3 || wind >= 35) {
+          return `High weather risk • ${Number.isFinite(temp) ? Math.round(temp) + '°' : ''} ${precip ? '• precip ' + precip.toFixed(1) + ' mm' : ''} ${wind ? '• wind ' + Math.round(wind) + ' km/h' : ''}`.replace(/\s+/g,' ').trim();
+        }
+        if (precip > 0.2 || wind >= 22) {
+          return `Possible weather delay • ${Number.isFinite(temp) ? Math.round(temp) + '°' : ''} ${precip ? '• light precip ' + precip.toFixed(1) + ' mm' : ''} ${wind ? '• wind ' + Math.round(wind) + ' km/h' : ''}`.replace(/\s+/g,' ').trim();
+        }
+        return `Low weather impact • ${Number.isFinite(temp) ? Math.round(temp) + '°' : 'current conditions checked'}`;
+      } catch (error) {
+        return 'Weather check unavailable';
+      }
+    }
+
+    function getTrafficNote(route, bestDuration) {
+      const deltaMinutes = Math.max(0, Math.round((route.duration - bestDuration) / 60));
+      if (deltaMinutes <= 3) return 'No major issue flagged vs best route';
+      if (deltaMinutes <= 12) return `Moderate slow-down • about ${deltaMinutes} min slower than Route 1`;
+      return `Heavier slow-down • about ${deltaMinutes} min slower than Route 1`;
+    }
+
+    function clearMapLayers() {
+      if (routeLine) map.removeLayer(routeLine);
+      if (startMarker) map.removeLayer(startMarker);
+      if (endMarker) map.removeLayer(endMarker);
+      routeLine = null;
+      startMarker = null;
+      endMarker = null;
+    }
+
+    function renderSelectedRoute(index, start, end) {
+      const route = currentRoutes[index];
+      if (!route) return;
+      currentRouteIndex = index;
+
+      clearMapLayers();
+
+      routeLine = L.geoJSON(route.geometry, {
+        style: { color: '#4ea1ff', weight: 6, opacity: 0.88 }
+      }).addTo(map);
+
+      startMarker = L.marker([start.lat, start.lon]).addTo(map).bindPopup(`<strong>Start</strong><br>${start.label}`);
+      endMarker = L.marker([end.lat, end.lon]).addTo(map).bindPopup(`<strong>End</strong><br>${end.label}`);
+
+      const group = L.featureGroup([routeLine, startMarker, endMarker]);
+      map.fitBounds(group.getBounds().pad(0.14));
+
+      document.querySelectorAll('.route-card').forEach((card, cardIndex) => {
+        card.classList.toggle('active', cardIndex === index);
+      });
+    }
+
+    function routeBadge(index) {
+      if (index === 0) return 'Best match';
+      if (index === 1) return 'Alt route';
+      return 'More options';
+    }
+
+    function renderResults(start, end) {
+      els.results.innerHTML = currentRoutes.map((route, index) => `
+        <article class="route-card ${index === currentRouteIndex ? 'active' : ''}" data-route-index="${index}">
+          <div class="route-top">
+            <div class="route-name">Route ${index + 1}</div>
+            <div class="badge">${routeBadge(index)}</div>
+          </div>
+          <div class="route-grid">
+            <div class="route-pill">
+              <span class="label">Mileage</span>
+              <span class="value">${formatMiles(route.distance)}</span>
+            </div>
+            <div class="route-pill">
+              <span class="label">Drive Time</span>
+              <span class="value">${formatDuration(route.duration)}</span>
+            </div>
+            <div class="route-pill">
+              <span class="label">Traffic / Issues</span>
+              <span class="value">${route.trafficNote}</span>
+            </div>
+            <div class="route-pill">
+              <span class="label">Weather Delay</span>
+              <span class="value">${route.weatherNote}</span>
+            </div>
+          </div>
+        </article>
+      `).join('');
+
+      els.routeCount.textContent = String(currentRoutes.length);
+
+      document.querySelectorAll('.route-card').forEach(card => {
+        card.addEventListener('click', () => {
+          renderSelectedRoute(Number(card.dataset.routeIndex), start, end);
+        });
+      });
+    }
+
+    async function loadRoutes(start, end) {
+      setStatus('Calculating route choices…', true);
+      els.results.innerHTML = '';
+      els.routeCount.textContent = '0';
+      clearMapLayers();
+
+      const query = `${start.lon},${start.lat};${end.lon},${end.lat}?alternatives=true&overview=full&geometries=geojson&steps=true`;
+      const response = await fetch(ROUTER_BASE + query);
+      if (!response.ok) throw new Error('Route service unavailable');
+      const data = await response.json();
+      if (!data.routes || !data.routes.length) throw new Error('No routes returned');
+
+      const bestDuration = data.routes[0].duration;
+      const weatherNotes = await Promise.all(data.routes.map(route => getWeatherNote(route)));
+
+      currentRoutes = data.routes.map((route, index) => ({
+        ...route,
+        weatherNote: weatherNotes[index],
+        trafficNote: getTrafficNote(route, bestDuration)
+      }));
+
+      currentRouteIndex = 0;
+      renderResults(start, end);
+      renderSelectedRoute(0, start, end);
+      setStatus(`Showing ${currentRoutes.length} route option${currentRoutes.length === 1 ? '' : 's'} from ${start.locationName || start.locationId} to ${end.locationName || end.locationId}.`);
+    }
+
+    async function handleFindRoutes() {
+      const start = findLocationByLabel(els.startInput.value);
+      const end = findLocationByLabel(els.endInput.value);
+
+      if (!start) {
+        setStatus('Please choose a valid starting location from the dropdown list.');
+        return;
+      }
+      if (!end) {
+        setStatus('Please choose a valid ending location from the dropdown list.');
+        return;
+      }
+      if (start.id === end.id) {
+        setStatus('Start and end cannot be the same exact location.');
+        return;
+      }
+
+      try {
+        await loadRoutes(start, end);
+      } catch (error) {
+        console.error(error);
+        setStatus('Could not load route options right now. Try a different pair of locations or reload the page.');
+      }
+    }
+
+    function swapValues() {
+      const currentStart = els.startInput.value;
+      els.startInput.value = els.endInput.value;
+      els.endInput.value = currentStart;
+    }
+
+    function resetPlanner() {
+      els.startInput.value = '';
+      els.endInput.value = '';
+      els.typeFilter.value = 'All';
+      currentRoutes = [];
+      els.results.innerHTML = '';
+      els.routeCount.textContent = '0';
+      clearMapLayers();
+      map.setView([39.5, -98.35], 4);
+      applyTypeFilter();
+    }
+
+    async function loadCsv() {
+      setStatus('Loading locations from CSV…', true);
+      return new Promise((resolve, reject) => {
+        Papa.parse(CSV_PATH, {
+          download: true,
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            try {
+              const uniqueMap = new Map();
+              (results.data || []).forEach((row, index) => {
+                if (!hasCoords(row)) return;
+                const record = normalizeRecord(row, index);
+                const dedupeKey = [record.type, record.locationName, record.city, record.state, record.zip, record.lat.toFixed(5), record.lon.toFixed(5)].join('|');
+                if (!uniqueMap.has(dedupeKey)) uniqueMap.set(dedupeKey, record);
+              });
+
+              allLocations = Array.from(uniqueMap.values());
+              els.loadedCount.textContent = allLocations.length.toLocaleString();
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          },
+          error: reject
+        });
+      });
+    }
+
+    els.typeFilter.addEventListener('change', applyTypeFilter);
+    els.findRoutesBtn.addEventListener('click', handleFindRoutes);
+    els.swapBtn.addEventListener('click', swapValues);
+    els.resetBtn.addEventListener('click', resetPlanner);
+    els.startInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleFindRoutes(); });
+    els.endInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleFindRoutes(); });
+
+    (async function init() {
+      try {
+        await loadCsv();
+        applyTypeFilter();
+      } catch (error) {
+        console.error(error);
+        setStatus('Could not load locationsAltMoveZips.csv. Put the CSV in the same GitHub folder as this HTML file and keep the exact file name.');
+      }
+    })();
+  </script>
+</body>
+</html>
