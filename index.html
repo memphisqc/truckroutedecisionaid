@@ -578,10 +578,12 @@
 
       allLocations = Array.from(dedupe.values()).sort((a, b) => a.label.localeCompare(b.label));
       airportLocations = allLocations.filter(x => x.type === 'Airport');
+      rampLocations = allLocations.filter(x => x.type === 'Ramp');
+      airCapableLocations = allLocations.filter(x => x.type === 'Airport' || x.type === 'Ramp');
       labelMap = new Map(allLocations.map(rec => [rec.label.toLowerCase(), rec]));
       filteredLocations = allLocations.slice();
       refreshOptionLists();
-      setStatus(`Loaded ${allLocations.length.toLocaleString()} unique mapped FedEx locations. Airports in file: ${airportLocations.length.toLocaleString()}.`);
+      setStatus(`Loaded ${allLocations.length.toLocaleString()} unique mapped FedEx locations. Airports: ${airportLocations.length.toLocaleString()}. Ramps: ${rampLocations.length.toLocaleString()}.`);
     }
 
     function refreshOptionLists() {
@@ -618,14 +620,18 @@
       return null;
     }
 
+    function isAirCapable(record) {
+      return !!record && (record.type === 'Airport' || record.type === 'Ramp');
+    }
+
     function nearestAirportTo(record) {
       return nearestAirportsTo(record, 1)[0] || null;
     }
 
     function nearestAirportsTo(record, limit = 3, excludedStationKeys = []) {
-      if (!airportLocations.length) return [];
+      if (!airCapableLocations.length) return [];
       const excluded = new Set(excludedStationKeys || []);
-      return airportLocations
+      return airCapableLocations
         .filter(ap => !(ap.stationKey === record.stationKey && ap.type === record.type) && !excluded.has(ap.stationKey))
         .map(ap => ({
           airport: ap,
@@ -699,7 +705,7 @@
     }
 
     function buildDirectFlightCandidate(start, end) {
-      if (start.type !== 'Airport' || end.type !== 'Airport') return null;
+      if (!isAirCapable(start) || !isAirCapable(end)) return null;
       const flight = estimateFlightMetrics(start, end);
       return {
         id: `flight-direct-${start.stationKey}-${end.stationKey}`,
@@ -711,7 +717,7 @@
         durationMin: flight.durationMin,
         score: flight.durationMin,
         notes: {
-          traffic: 'No truck segment. Route is ranked from airport-to-airport timing only.',
+          traffic: 'Air move between air-capable FedEx locations. No truck handoff required.',
           weather: 'Weather note loads after route ranking.'
         },
         segments: [
@@ -725,13 +731,13 @@
             durationMin: flight.durationMin
           }
         ],
-        subtitle: `Airport-to-airport move from ${start.stationKey} to ${end.stationKey}`,
+        subtitle: `Air move from ${start.stationKey} to ${end.stationKey}`,
         routeRankGroup: 'flight'
       };
     }
 
     async function buildFlightTruckCandidate(start, end, arrivalAirportRef) {
-      if (start.type !== 'Airport') return null;
+      if (!isAirCapable(start)) return null;
       if (!arrivalAirportRef || !arrivalAirportRef.airport) return null;
 
       const arrivalAirport = arrivalAirportRef.airport;
@@ -744,7 +750,7 @@
       return {
         id: `combo-${start.stationKey}-${arrivalAirport.stationKey}-${end.stationKey}`,
         modeKey: 'combo',
-        title: 'ALT move',
+        title: 'Flight + truck',
         icon: '✈️🚛',
         cardModeLabel: 'Flight first, then truck',
         distanceMiles: flight.distanceMiles + truckLeg.distanceMiles,
@@ -826,12 +832,11 @@
     }
 
     async function buildAltComboCandidates(start, end, limit = 2) {
-      if (start.type !== 'Airport') return [];
-      const excluded = new Set();
-      if (end.type === 'Airport') excluded.add(end.stationKey);
-      excluded.add(start.stationKey);
+      if (!isAirCapable(start)) return [];
+      const excluded = new Set([start.stationKey]);
+      if (isAirCapable(end)) excluded.add(end.stationKey);
 
-      const nearbyAirports = nearestAirportsTo(end, 8, Array.from(excluded));
+      const nearbyAirports = nearestAirportsTo(end, 12, Array.from(excluded));
       const combos = [];
       for (const airportRef of nearbyAirports) {
         try {
@@ -845,22 +850,34 @@
       return combos;
     }
 
-    function buildRoutePlan(start, end, truckRoutes, directFlight, altCombos) {
-      const primary = directFlight || truckRoutes[0] || null;
+    async function buildPrimaryAndAlts(start, end, truckRoutes) {
+      const directTruck = truckRoutes[0] || null;
+      const directFlight = buildDirectFlightCandidate(start, end);
+      const altCombos = await buildAltComboCandidates(start, end, 4);
+
+      const candidates = [];
+      if (directFlight) candidates.push({ ...directFlight, sortBucket: 1 });
+      if (altCombos[0] && !isAirCapable(end)) candidates.push({ ...altCombos[0], title: 'Flight to nearest air location + truck', sortBucket: 1 });
+      if (directTruck) candidates.push({ ...directTruck, sortBucket: 2 });
+
+      const primary = candidates.sort((a,b)=> a.score - b.score || a.sortBucket - b.sortBucket)[0] || directTruck || directFlight || altCombos[0] || null;
+
       const altRoutes = [];
-
-      if (directFlight) {
+      if (primary?.modeKey !== 'combo') {
         altRoutes.push(...altCombos);
-        if (truckRoutes[0]) altRoutes.push({ ...truckRoutes[0], title: 'Direct truck fallback' });
-        altRoutes.push(...truckRoutes.slice(1));
       } else {
-        altRoutes.push(...altCombos);
-        altRoutes.push(...truckRoutes.slice(1));
+        altRoutes.push(...altCombos.filter(r => r.id !== primary.id));
       }
+      if (directTruck && primary?.id !== directTruck.id) altRoutes.push({ ...directTruck, title: 'Direct truck fallback' });
+      if (directFlight && primary?.id !== directFlight.id) altRoutes.push({ ...directFlight, title: 'Direct flight fallback' });
+      altRoutes.push(...truckRoutes.slice(1));
 
-      const uniquePrimary = primary ? [primary] : [];
-      const ordered = uniqueById([...uniquePrimary, ...altRoutes]).slice(0, 3);
-      return ordered.map((route, idx) => ({ ...route, routeNumber: idx + 1 }));
+      const ordered = uniqueById([primary, ...altRoutes].filter(Boolean)).slice(0,3);
+      return {
+        routes: ordered.map((route, idx) => ({ ...route, routeNumber: idx + 1 })),
+        directFlight,
+        altCombos
+      };
     }
 
 
@@ -994,10 +1011,9 @@
 
       try {
         const truckRoutes = await getTruckAlternatives(start, end);
-        const directFlight = buildDirectFlightCandidate(start, end);
-        const altCombos = await buildAltComboCandidates(start, end, 2);
+        const { routes: initialRoutes, directFlight, altCombos } = await buildPrimaryAndAlts(start, end, truckRoutes);
 
-        let routes = buildRoutePlan(start, end, truckRoutes, directFlight, altCombos);
+        let routes = initialRoutes;
 
         const weather = await getWeatherDelayNote(end);
         routes = routes.map(route => ({
@@ -1012,19 +1028,22 @@
         routeState.expanded = false;
         routeState.selectedRouteId = routeState.routes[0]?.id || null;
 
-        const originAirportOk = start.type === 'Airport';
+        const originAirportOk = isAirCapable(start);
         const altAirportText = altCombos.length
           ? altCombos.map(r => r.segments[0].endLabel.split(' · ')[0]).join(', ')
-          : 'No alternate airport combinations were available from the file for this pair.';
+          : 'No alternate air-to-truck recovery combinations were available from the file for this pair.';
 
-        const mainRouteText = directFlight
+        const mainRouteText = routes[0]?.modeKey === 'flight'
           ? `Primary route is direct flight from ${start.stationKey} to ${end.stationKey}.`
-          : `Primary route is direct truck from ${start.stationKey} to ${end.stationKey}.`;
+          : routes[0]?.modeKey === 'combo'
+            ? `Primary route is flight to the nearest airport/ramp, then truck to ${end.stationKey}.`
+            : `Primary route is direct truck from ${start.stationKey} to ${end.stationKey}.`;
 
         setStatus(`
           <strong>Plan built.</strong><br>
           ${escapeHtml(mainRouteText)}<br>
-          Origin airport eligible: <strong>${originAirportOk ? 'Yes' : 'No'}</strong>.<br>
+          Origin air-capable: <strong>${originAirportOk ? 'Yes' : 'No'}</strong>.<br>
+          Destination type: <strong>${escapeHtml(end.type)}</strong>.<br>
           ALT recovery airports prepared: <strong>${escapeHtml(altAirportText)}</strong>.<br>
           Click <strong>ALT Route</strong> anytime to reveal the next two fallback choices.
         `);
